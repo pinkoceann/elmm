@@ -1,0 +1,13 @@
+from scipy.io import loadmat
+from elmm_admm import elmm_admm
+import numpy as np
+
+sample = loadmat('real_data_1.mat')
+
+data = sample['data']
+S0 = sample['S0']
+
+m,n,L = data.shape
+
+# print(data.transpose().flatten())  # data[:]
+
