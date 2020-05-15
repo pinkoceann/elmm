@@ -1,4 +1,5 @@
 # https://github.com/matthew-brett/diffusion_mri
+import numpy
 
 def lsqnonneg(C, d, x0=None, tol=None, itmax_factor=3):
     '''Linear least squares with nonnegativity constraints

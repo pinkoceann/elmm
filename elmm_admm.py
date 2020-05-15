@@ -1,6 +1,6 @@
-import numpy as np
+from numpy import *
+from scipy.optimize import nnls
 import math
-from utils import lsqnonneg
 
 '''
 
@@ -107,44 +107,51 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
     N = m*n
 
     # data_r = data.reshape((N, L)).transpose()
-    data_r = np.reshape( np.copy(data), (N, L) ).transpose()
-    
-    rs = np.zeros((maxiter_anls,1))
-    ra = np.zeros((maxiter_anls,1))
-    rpsi = np.zeros((maxiter_anls,1))
+    data_r = data.copy().reshape((N, L) ,order='F').conj().T
+   
+    rs = zeros((maxiter_anls,1))
+    ra = zeros((maxiter_anls,1))
+    rpsi = zeros((maxiter_anls,1))
 
     A = A_init
-    S = np.tile( S0, [1,1,N] )
+    # MATLAB: S = repmat(S0,[1,1,N]);
+    S = array([tile(S0,(1,1)) for i in range(N)]).T
+    
     psi_maps = psis_init
 
-    S0ptS0 = np.diag(S0.transpose()*S0)
+    S0ptS0 = diag(S0.T@S0)
+    S0ptS0 = S0ptS0[None,].T
+
+    objective = zeros((maxiter_anls,1))
+    norm_fitting = zeros((maxiter_anls,1))
+    source_model = zeros((maxiter_anls,1))
     
     if scalar_lambda_a:
-        TV_a = np.zeros((maxiter_anls,1))
+        TV_a = zeros((maxiter_anls,1))
     else:
-        TV_a = np.zeros((maxiter_anls,P))
+        TV_a = zeros((maxiter_anls,P))
 
     if scalar_lambda_psi:
-        smooth_psi = np.zeros((maxiter_anls,1))
+        smooth_psi = zeros((maxiter_anls,1))
     else:
-        smooth_psi = np.zeros((maxiter_anls,P))
+        smooth_psi = zeros((maxiter_anls,P))
 
     # forward first order horizontal difference operator
-    FDh = np.zeros((m,n))
+    FDh = zeros((m,n))
     FDh[0, n-1] = -1
     FDh[m-1,n-1] = 1
-    FDh = np.fft.fft2(FDh)
-    FDhC = np.conj(FDh)
+    FDh = fft.fft2(FDh)
+    FDhC = conj(FDh)
 
     # forward first order vertical  difference operator
-    FDv = np.zeros((m,n))
+    FDv = zeros((m,n))
     FDv[0, n-1] = -1
     FDv[m-1,n-1] = 1;
-    FDv = np.fft.fft2(FDh)
-    FDvC = np.conj(FDh)
+    FDv = fft.fft2(FDh)
+    FDvC = conj(FDh)
 
     # barrier parameter of ADMM and related
-    rho = np.zeros((maxiter_admm,1))
+    rho = zeros((maxiter_admm,1))
     rho[0] = 10
     tau_incr = 2
     tau_decr = 2
@@ -153,22 +160,23 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
 
     # EXPECTED BUG: matrix vs element multiplication
     for i in range(maxiter_anls):
-        S_old = np.copy(S)
-        psi_maps_old = np.copy(psi_maps)
-        A_old_anls = np.copy(A)
+        S_old = S.copy()
+        psi_maps_old = psi_maps.copy()
+        A_old_anls = A.copy()
+        
         # print('updating S...' if verbose)
         
         #S_update
         for k in range(N):
-            first_op = np.multiply(data_r[:,k], A[:,k].transpose()) + np.multiply(np.multiply(lambda_s, S0), np.diag(psi_maps[:,k]))
-            second_op = np.multiply(A[:,k], A[:,k].transpose()) + np.multiply(lambda_s,np.identity(P))
-            S[:,:,k] = np.divide(first_op, second_op)
-            S[:,:,k] = np.max(pow(10,-6), S[:,:,k])
+            first_op = data_r[:,k]@A[:,k].conj().T+(lambda_s*S0)@diag(psi_maps[:,k])
+            second_op = A[:,k]@A[:,k].conj().T+lambda_s*eye(P)
+            S[:,:,k] = dot(first_op, linalg.pinv(second_op))  # first_op / second_op
+            S[:,:,k] = maximum(pow(10,-6), S[:,:,k])
 
 
         # A_update
 
-        if np.any( lambda_a ):
+        if any( lambda_a ):
             # initialize split variables
             v1 = A
             v1_im = conv2im(v1,m,n,P)
@@ -177,16 +185,16 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
             v4 = A
 
             # initialize Lagrange multipliers
-            d1 = np.zeros((P,N))
-            d2 = np.zeros((v2.shape))
-            d3 = np.zeros((v3.shape))
-            d4 = np.zeros((psi_maps.shape))
+            d1 = zeros((P,N))
+            d2 = zeros((v2.shape))
+            d3 = zeros((v3.shape))
+            d4 = zeros((psi_maps.shape))
 
-            mu = np.zeros((1,N))
+            mu = zeros((1,N))
 
             # initialize primal and dual variables
-            primal = np.zeros(maxiter_admm,1)
-            dual = np.zeros(maxiter_admm,1)
+            primal = zeros((maxiter_admm,1))
+            dual = zeros((maxiter_admm,1))
 
             # precomputing
             Hvv1 = ConvC(v1,FDv,m,n,P)
@@ -202,13 +210,19 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                 d4_old = d4
 
                 for k in range(N):
-                    ALPHA = S[:,:,k].transpose()*S[:,:,k]+2*rho[j]*identity(P)
-                    ALPHA_INVERTED = np.linalg.inv(ALPHA)
-                    BETA = np.ones((P,1))
+                    ALPHA = S[:,:,k].T@S[:,:,k]+2*rho[j]*eye(P)
+                    ALPHA_INVERTED = linalg.inv(ALPHA)
+                    BETA = ones((P,1))
                     s = ALPHA_INVERTED.sum(axis=0)
-                    SEC_MEMBER = np.concatenate(( S[:,:,k].transpose()*data_r[:,k] + rho[j]*(v1[:,k]+d1[:,k]+v4[:,k]+d4[:k]), 1), axis=0)
-                    OMEGA_INV = np.concatenate(( (ALPHA_INVERTED*(identity(P)-1/s*np.ones((P,P))*ALPHA_INVERTED), 1/s * ALPHA_INVERTED * BETA), (1/s*BETA.transpose()*ALPHA_INVERTED, -1/s)), axis=0) # TODO: concatenate must mirror matlab
-                    X = OMEGA_INV * SEC_MEMBER
+                    SEC_MEMBER = concatenate(( S[:,:,k].T@data_r[:,k] + rho[j]*(v1[:,k] + d1[:,k] + v4[:,k] + d4[:,k]), array([1])), axis=0)
+                    OMEGA_a = concatenate((ALPHA_INVERTED@(eye(P)-1/s*ones((P,P))@ALPHA_INVERTED), 1/s * ALPHA_INVERTED * BETA), axis=None)
+                    OMEGA_b = concatenate( (1/s*BETA.T*ALPHA_INVERTED, -1/s), axis=None)
+                    print(OMEGA_a.shape)
+                    print(OMEGA_b.shape)
+                    OMEGA_INV = concatenate(( OMEGA_a, OMEGA_b), axis=0)
+                    print(OMEGA_INV.shape)
+                    print(SEC_MEMBER.shape)
+                    X = OMEGA_INV @ SEC_MEMBER
 
                     A[:,k] = X[0:-2]
                     mu[k] = X[-1]
@@ -223,8 +237,8 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                 # update in the Fourier domain
 
                 for p in range(P):
-                    sec_spectral_term = np.fft.fft2(np.squeeze(A_im[:,:,p]) - np.squeeze(d1_im[:,:,p])) + np.fft.fft2(np.squeeze((v2_im[:,:,p]+np.squeeze(d2_im[:,:,p])))*FDhC + np.fft.fft2(np.squeeze(v3_im[:,:,p]+np.squeeze(d3_im[:,:,p]))))*FDvC
-                    v1_im[:,:,p] = np.real(np.ftt.ifft2((sec_spectral_term)/(np.ones((m,n)) + abs(FDh)**2 + abs(FDv)**2)))
+                    sec_spectral_term = fft.fft2(squeeze(A_im[:,:,p]) - squeeze(d1_im[:,:,p])) + fft.fft2(squeeze((v2_im[:,:,p]+squeeze(d2_im[:,:,p])))*FDhC + fft.fft2(squeeze(v3_im[:,:,p]+squeeze(d3_im[:,:,p]))))*FDvC
+                    v1_im[:,:,p] = dot(real(ftt.ifft2((sec_spectral_term), linalg.pinv(ones((m,n)) + abs(FDh)**2 + abs(FDv)**2))))
 
 
                 # convert back necessary variables into matrices
@@ -255,7 +269,7 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                             
                 # min w.r.t. v4
 
-                v4 = max(A-d4, np.zeros(A.shape))
+                v4 = max(A-d4, zeros(A.shape))
 
 
                 # dual update
@@ -273,15 +287,15 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
 
                 # primal and dual residuals
 
-                primal[j] = math.sqrt( np.linalg.norm(p_res1, 'fro')**2 + np.linalg.norm(p_res2, 'fro')**2 + np.linalg.norm(p_res3, 'fro')**2 + np.linalg.norm(p_res4, 'fro')**2 )
-                dual[j] = rho[j] * math.sqrt( np.linalg.norm(v1_old-v1,'fro')**2 + np.linalg.norm(v4_old-v4,'fro')**2 )
+                primal[j] = math.sqrt( linalg.norm(p_res1, 'fro')**2 + linalg.norm(p_res2, 'fro')**2 + linalg.norm(p_res3, 'fro')**2 + linalg.norm(p_res4, 'fro')**2 )
+                dual[j] = rho[j] * math.sqrt( linalg.norm(v1_old-v1,'fro')**2 + linalg.norm(v4_old-v4,'fro')**2 )
 
                 # compute termination values
 
-                epsilon_primal = math.sqrt(4*P*N) * epsilon_admm_abs + epsilon_admm_rel*max(math.sqrt(2*np.linalg.norm(A,'fro')**2), math.sqrt(np.linalg.norm(v1_old,'fro')**2 + np.linalg.norm(p_res2_old,'fro')**2 + np.linalg.norm(p_res3_old,'fro')**2 + np.linalg.norm(v4_old,'fro')**2))
-                epsilon_dual = math.sqrt(P*N)*epsilon_admm_abs + rho[j] * epsilon_admm_rel * math.sqrt(np.linalg.norm(d1_old,'fro')+np.linalg.norm(d4_old,'fro')**2)
+                epsilon_primal = math.sqrt(4*P*N) * epsilon_admm_abs + epsilon_admm_rel*max(math.sqrt(2*linalg.norm(A,'fro')**2), math.sqrt(linalg.norm(v1_old,'fro')**2 + linalg.norm(p_res2_old,'fro')**2 + linalg.norm(p_res3_old,'fro')**2 + linalg.norm(v4_old,'fro')**2))
+                epsilon_dual = math.sqrt(P*N)*epsilon_admm_abs + rho[j] * epsilon_admm_rel * math.sqrt(linalg.norm(d1_old,'fro')+linalg.norm(d4_old,'fro')**2)
 
-                rel_A = abs(np.linalg.norm(A,'fro')-np.linalg.norm(A_old,'fro'))/np.linalg.norm(A_old,'fro')
+                rel_A = dot(abs(linalg.norm(A,'fro')-linalg.norm(A_old,'fro')), linalg.pinv(linalg.norm(A_old,'fro')))
 
 
                 # display of admm results
@@ -296,10 +310,10 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                 # rho update
 
                 if j < maxiter_admm:
-                    if np.norm(primal[j]) > nu*np.norm(dual[j]):
+                    if norm(primal[j]) > nu*norm(dual[j]):
                         rho[j+1] = tau_incr*rho[j]
                         A = A/tau_incr
-                    elif np.norm(dual[j]) < nu*np.norm(primal[j]):
+                    elif norm(dual[j]) < nu*norm(primal[j]):
                         rho[j+1] = rho[j]/tau_decr
                         A = tau_decr * A
                     else:
@@ -312,7 +326,6 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
             for k in range(N):
                 A[:,k] = FCLSU(data_r[:,k],S[:,:,k])
 
-
             if verbose:
                 print("Done")
                 print("updating psi..")
@@ -324,45 +337,47 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                 if scalar_lambda_psi:
                     for p in range(P):
                         numerator = 0 # TODO
-                        psi_maps_im = np.real(np.fft.ifft2(np.fft.fft2(numerator)/((lambda_psi*(abs(FDh)**2+abs(FDv)**2)+lambda_s*S0ptS0[p]))))
+                        psi_maps_im = real(fft.ifft2(fft.fft2(numerator)/((lambda_psi*(abs(FDh)**2+abs(FDv)**2)+lambda_s*S0ptS0[p]))))
                         psi_maps[p,:] = psi_maps_im[:]
 
                 else:
                     for p in range(P):
                         numerator = 0 # TODO
-                        psi_maps_im = np.real(np.fft.ifft2(np.fft.fft2(numerator)/((lambda_psi[p]*(abs(FDh)**2+abs(FDv)**2)+lambda_s*S0ptS0[p]))))
+                        psi_maps_im = real(fft.ifft2(fft.fft2(numerator)/((lambda_psi[p]*(abs(FDh)**2+abs(FDv)**2)+lambda_s*S0ptS0[p]))))
                         psi_maps[p,:] = psi_maps_im[:]
             else:
                 for p in range(P):
-                    psi_maps_temp = np.zeros((N,1))
+                    psi_maps_temp = zeros((N,1))
                     for k in range(N):
-                        psi_maps_temp[k] = (S0[:,p].transpose()*S[:,p,k])/S0ptS0[p]
-                    psi_maps[p,:] = psi_maps_temp
+                        psi_maps_temp[k] = (S0[:,p].T@S[:,p,k])/S0ptS0[p]
+                        
+                    psi_maps[p,:] = psi_maps_temp.flatten()
 
             if verbose:
                 print("Done")
 
                 
             # residuals of the ANLS loops
-            rs_vect = np.zeros((N,1))
+            rs_vect = zeros((N,1))
 
             for k in range(N):
-                rs_vect[k] = np.linalg.norm(np.squeeze(S[:,:,k])-np.squeeze(S_old[:,:,k]),'fro')/np.linalg.norm(np.squeeze(S_old[:,:,k]),'fro')
+                rs_vect[k] = linalg.norm(squeeze(S[:,:,k])-squeeze(S_old[:,:,k]),'fro')/linalg.norm(squeeze(S_old[:,:,k]),'fro')
 
             rs[i] = rs_vect.mean(axis=0)
-            ra[i] = np.linalg.norm(A[:]-A_old_anls[:],2)/np.linalg.norm(A_old_anls[:],2)
-            rpsi[i] = np.linalg.norm(psi_maps-psi_maps_old,'fro')/(norm(psi_maps_old,'fro'))
+            ra[i] = linalg.norm(A[:]-A_old_anls[:],2)/linalg.norm(A_old_anls[:],2)
+            rpsi[i] = linalg.norm(psi_maps-psi_maps_old,'fro')/(linalg.norm(psi_maps_old,'fro'))
 
             # compute objective function value
 
-            SkAk = np.zeros((L,N))
+            SkAk = zeros((L,N))
+            S0_psi = ndarray((L,P,N))  # S0_psi initializes automatically in matlab in forloop, manually here
             for k in range(N):
-                SkAk[:,k] = np.squeeze(S[:,:,k]*A[:,k])
-                S0_psi[:,:,k] = S0*np.diag(psi_maps[:,k])
+                SkAk[:,k] = squeeze(S[:,:,k]@A[:,k])
+                S0_psi[:,:,k] = S0*diag(psi_maps[:,k])
 
-            norm_fitting[i] = 1/2*np.norm(data_r[:]-SkAk[:])**2
+            norm_fitting[i] = 1/2*linalg.norm(data_r[:]-SkAk[:])**2
 
-            source_model[i] = 1/2*np.norm(S[:]-S0_psi[:])**2
+            source_model[i] = 1/2*linalg.norm(S[:]-S0_psi[:])**2
 
             if any(lambda_psi) and any(lambda_a):  # different objective functions depending on the chosen regularizations
                 if scalar_lambda_psi:
@@ -429,6 +444,7 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
                 objective[i] = norm_fitting[i] + lambda_s * source_model[i]
 
             # termination test
+            print(f'iteration: {i}');
             if (rs[i] < epsilon_s) and (ra[i] < espilon_a) and (rpsi[i] < epsilon_psi):
                 break
                             
@@ -458,49 +474,51 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
 
 #Fully Constrained Linear Spectral Unmixing
 def FCLSU(HIM,M):
+    if len(HIM.shape) == 1:
+        HIM = HIM[:,None]
+       
     ns = HIM.shape[1]
     l = M.shape[0]
     p = M.shape[1]
     Delta = 1/1000
-    N = np.zeros((l+1,p))
-    N[1:l,1:p] = Delta*M
-    N[l+1,:] = np.ones((1,p))
-    s = np.zeros((l+1,1))
+    N = zeros((l+1,p))
+    N[0:l,0:p] = Delta*M
+    N[l,:] = ones((1,p))
+    s = zeros((l+1,1))
     
-    out = np.zeros((ns,p))
+    out = zeros((ns,p))
 
     for i in range(ns):
-        s[1:l] = Delta*HIM[:,i]
-        s[1:l] = 1
-        Abundances = lsqnonneg(N,s)
+        s[0:l] = Delta*HIM[:,i,None] 
+        s[l] = 1
+        Abundances = nnls(N,s.flatten())[0].T
         out[i,:] = Abundances
     return out
 
 # circular convolution
 def ConvC(X, FK, m, n, P):
-    # likely area for a bug
-    
     # matlab:
-    # reshape(real(ifft2(fft2(reshape(X', m,n,P)).*repmat(FK,[1,1,P]))), m*n,P)';
-    # python:
-    # np.real(np.fft.ifft2(np.fft.fft2(X.transpose().reshape((m,n,P)))*np.kron(np.ones((1,1,P)),FK))).reshape((m*n,P)).transpose()
+    # reshape(real(ifft2(fft2(reshape(X', m,n,P)).*repmat(FK,[1,1,P])) ), m*n,P)';
+    # MATLAB: S = repmat(S0,[1,1,N]);
+    # S = array([tile(S0,(1,1)) for i in range(N)]).T
+    
+    first_op = fft.fft2(X.T.reshape(m,n,P, order='F'))
+    second_op = real( fft.ifft2( first_op * array([tile(S0,(1,1)) for i in range(P)]).T))
+    third_op = second_op.reshape( m*n, P ).T
 
-    first_op = np.fft.fft2(X.transpose().reshape((m,n,P)))
-    second_op = np.real( np.fft.ifft2( first_op * np.kron( np.ones((1,1,P)), FK) ))
-    third_op = second_op.reshape((m*n, P)).transpose()
     return third_op
 
 # convert matrix to image
 def conv2im(A, m, n, P):
-    return A.transpose().reshape((m,n,P))
+    return A.T.reshape((m,n,P))
 
 # convert image to matrix
 def conv2mat(A, m, n, P):
-    return A.reshape((m*n,P)).transpose()
+    return A.reshape((m*n,P)).T
 
 # soft-thresholding function
 def soft(x, T):
-    if np.sum(abs(T.flatten(1))) == 0:
+    if sum(abs(T.flatten(1))) == 0:
         y = x
     else:
         y = max(abs(x)-T, 0)
@@ -511,7 +529,7 @@ def soft(x, T):
 def vector_soft_col(X, tau):
     NU = math.sqrt(sum(X**2))
     A = max(0,NU-tau)
-    Y = np.kron(np.ones((size(X, axis=1),1)), (A/(A+tau))) * X
+    Y = kron(ones((size(X, axis=1),1)), (A/(A+tau))) * X
     return Y
 
 
@@ -524,13 +542,13 @@ if __name__ == '__main__':
 
     arb = 5
     
-    data = np.zeros((n,n,L))
-    A_init = np.zeros((P, N))
-    psis_init = np.zeros((P, N))
-    S0 = np.zeros((L, P))
-    lambda_s = np.zeros((arb,arb))
-    lambda_a = np.zeros((arb,arb))
-    lambda_psi = np.zeros((arb,arb))
+    data = ones((n,n,L))
+    A_init = ones((P, N))
+    psis_init = ones((P, N))
+    S0 = ones((L, P))
+    lambda_s = arb
+    lambda_a = ones((arb,arb))
+    lambda_psi = ones((arb,arb))
     
     output = elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi )
 
