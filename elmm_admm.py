@@ -68,6 +68,7 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
     function and its different terms at each iteration
     '''
  
+    # set default values for optional parameters
     norm_sr = kwargs.get('norm_sr', '1,1')
     verbose = kwargs.get('verbose', True)
     maxiter_anls = kwargs.get('maxiter_anls', 100)
@@ -77,7 +78,6 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
     epsilon_psi = kwargs.get('epsilon_psi', 10**(-3))
     epsilon_admm_abs = kwargs.get('epsilon_admm_abs', 10**(-2))
     epsilon_admm_rel = kwargs.get('epsilon_admm_rel', 10**(-2))
-
 
 
     P = A_init.shape[0]  # number of endmembers
@@ -164,7 +164,6 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
         psi_maps_old = psi_maps.copy()
         A_old_anls = A.copy()
         
-        # print('updating S...' if verbose)
         
         #S_update
         for k in range(N):
@@ -342,7 +341,7 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
 
                 else:
                     for p in range(P):
-                        numerator = 0 # TODO
+                        numerator = 0 # TODO (translate from matlab)
                         psi_maps_im = real(fft.ifft2(fft.fft2(numerator)/((lambda_psi[p]*(abs(FDh)**2+abs(FDv)**2)+lambda_s*S0ptS0[p]))))
                         psi_maps[p,:] = psi_maps_im[:]
             else:
@@ -469,11 +468,18 @@ def elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi, **kw
 
     return outputs
 
-# auxiliary functions
 
 
-#Fully Constrained Linear Spectral Unmixing
+# # define some auxiliary functions:
+
+# Fully Constrained Linear Spectral Unmixing
+# has it's own .m file in source code
+# may be useful to implement in it's own file
 def FCLSU(HIM,M):
+    # depends on scipy nnls import
+    # this was a hacky implementation
+    # should be tested
+
     if len(HIM.shape) == 1:
         HIM = HIM[:,None]
        
@@ -499,8 +505,11 @@ def FCLSU(HIM,M):
 def ConvC(X, FK, m, n, P):
     # matlab:
     # reshape(real(ifft2(fft2(reshape(X', m,n,P)).*repmat(FK,[1,1,P])) ), m*n,P)';
+
+    # AN ESPECIALLY WEIRD m->py DISCREPANCY
+    # not exactly sure how this works, but it's what I've been using.
     # MATLAB: S = repmat(S0,[1,1,N]);
-    # S = array([tile(S0,(1,1)) for i in range(N)]).T
+    # python: S = array([tile(S0,(1,1)) for i in range(N)]).T
     
     first_op = fft.fft2(X.T.reshape(m,n,P, order='F'))
     second_op = real( fft.ifft2( first_op * array([tile(S0,(1,1)) for i in range(P)]).T))
@@ -515,6 +524,8 @@ def conv2im(A, m, n, P):
 # convert image to matrix
 def conv2mat(A, m, n, P):
     return A.reshape((m*n,P)).T
+
+# # soft(x,T) and vector_soft_col(X, tau) are in a separate .m file in source code
 
 # soft-thresholding function
 def soft(x, T):
@@ -532,15 +543,25 @@ def vector_soft_col(X, tau):
     Y = kron(ones((size(X, axis=1),1)), (A/(A+tau))) * X
     return Y
 
+'''
+# code block used for testing by running this .py file
 
+# this test case is NOT sufficient
+# only used for getting the basic matrix shapes correct
+# It's recommended that a real test case is set up before much further work on the algorithm itself
 if __name__ == '__main__':
+
+    # print statements are littered around the algorithm
+    # this is how it was done in MATLAB
+    # should be removed before final PyHAT implementation
+
     m = 5
     n = 5
     L = 5
     P = 5
     N = m * n
 
-    arb = 5
+    arb = 5  # arbitrary integer
     
     data = ones((n,n,L))
     A_init = ones((P, N))
@@ -553,4 +574,4 @@ if __name__ == '__main__':
     output = elmm_admm( data, A_init, psis_init, S0, lambda_s, lambda_a, lambda_psi )
 
     print( output )
-
+'''
